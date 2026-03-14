@@ -41,99 +41,85 @@ function Stars({ rating, size = 'sm' }) {
 
 export default function RestaurantCard({ restaurant: r, rank }) {
   const [showReviews, setShowReviews] = useState(false);
-  const [imgError, setImgError] = useState(false);
-
-  const photoSrc = r.photoUrl && !imgError ? r.photoUrl : null;
 
   // Determine score color
   const scoreColor =
-    r.vibeScore >= 8 ? 'bg-emerald-500'
-    : r.vibeScore >= 5 ? 'bg-amber-400'
-    : r.vibeScore != null ? 'bg-red-400'
+    r.vibeScore >= 8 ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+    : r.vibeScore >= 5 ? 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/30'
+    : r.vibeScore != null ? 'bg-slate-700/50 text-slate-300 border-slate-600'
     : null;
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-2xl bg-white shadow-xl transition-transform hover:-translate-y-0.5 hover:shadow-2xl">
-      {/* Photo area */}
-      <div className="relative h-48 flex-shrink-0 overflow-hidden bg-gradient-to-br from-green-800 to-emerald-900">
-        {photoSrc ? (
-          <img
-            src={photoSrc}
-            alt={r.name}
-            className="h-full w-full object-cover"
-            onError={() => setImgError(true)}
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-6xl opacity-60">
-            🍽️
-          </div>
-        )}
-
-        {/* Rank badge */}
-        <div className="absolute left-3 top-3 rounded-full bg-emerald-600 px-2.5 py-0.5 text-xs font-bold text-white shadow">
-          #{rank}
+    <div className="group relative flex flex-col overflow-hidden rounded-3xl border border-white/5 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-white/10 hover:bg-white/[0.04] hover:shadow-indigo-500/10">
+      
+      {/* Top Action Row: Rank & Score */}
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/10 text-sm font-bold text-indigo-400 ring-1 ring-indigo-500/20">
+          {rank}
         </div>
-
-        {/* AI Vibe Score badge */}
-        {r.vibeScore != null && (
-          <div className={`absolute left-3 bottom-3 rounded-full px-2.5 py-1 text-xs font-bold text-white shadow ${scoreColor}`}>
-            ✦ {r.vibeScore}/10 vibe match
-          </div>
-        )}
-
-        {/* Open/Closed */}
-        {r.isOpen !== null && (
-          <div
-            className={`absolute right-3 top-3 rounded-full px-2.5 py-0.5 text-xs font-bold shadow ${
-              r.isOpen ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-            }`}
-          >
-            {r.isOpen ? '● Open' : '● Closed'}
-          </div>
-        )}
-
-        {/* Distance */}
-        {r.distance !== null && (
-          <div className="absolute bottom-3 right-3 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-sm">
-            📍 {r.distance} km away
-          </div>
-        )}
+        
+        <div className="flex items-center gap-2">
+          {r.distance !== null && (
+            <span className="rounded-full bg-white/5 px-2.5 py-1 text-xs font-medium text-slate-400 ring-1 ring-white/10">
+              {r.distance} km
+            </span>
+          )}
+          {r.vibeScore != null && (
+            <div className={`rounded-full border px-3 py-1 text-xs font-bold ${scoreColor}`}>
+              ✧ {r.vibeScore}/10 Match
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Card body */}
-      <div className="flex flex-1 flex-col p-4">
+      <div className="flex flex-1 flex-col">
         {/* Name + Price */}
-        <div className="mb-1.5 flex items-start justify-between gap-2">
-          <h3 className="flex-1 text-base font-bold leading-tight text-gray-900">{r.name}</h3>
-          {r.priceLevel != null && (
-            <span className="flex-shrink-0 text-sm font-medium text-emerald-600">
-              {PRICE_LABELS[r.priceLevel] || ''}
-            </span>
-          )}
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <h3 className="flex-1 text-xl font-semibold tracking-tight text-white group-hover:text-indigo-300 transition-colors">{r.name}</h3>
+          <div className="flex flex-col items-end gap-1">
+            {r.isOpen !== null && (
+              <span className={`text-[10px] uppercase tracking-wider font-bold ${r.isOpen ? 'text-emerald-400' : 'text-slate-500'}`}>
+                {r.isOpen ? 'Open Now' : 'Closed'}
+              </span>
+            )}
+            {r.priceLevel != null && (
+              <span className="flex-shrink-0 text-sm font-medium text-slate-400">
+                {PRICE_LABELS[r.priceLevel] || ''}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* AI Vibe Reason */}
         {r.vibeReason && (
-          <p className="mb-2 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs italic text-emerald-700">
-            🤖 {r.vibeReason}
-          </p>
+          <div className="mb-4 relative rounded-xl bg-blue-900/20 p-4 border border-blue-500/20">
+            <div className="absolute -left-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-blue-500 text-[10px] shadow-lg shadow-blue-500/40">
+              ✨
+            </div>
+            <p className="text-sm font-medium text-blue-100/90 leading-relaxed">
+              {r.vibeReason}
+            </p>
+          </div>
         )}
 
         {/* Stars + review count */}
-        <div className="mb-2 flex items-center gap-2">
-          <Stars rating={r.rating} />
-          {r.totalRatings > 0 && (
-            <span className="text-xs text-gray-400">({r.totalRatings.toLocaleString()} reviews)</span>
-          )}
-        </div>
+        {r.rating != null && (
+          <div className="mb-3 flex items-center gap-2">
+            <Stars rating={r.rating} />
+            {r.totalRatings > 0 && (
+              <span className="text-xs text-slate-400">({r.totalRatings.toLocaleString()} reviews)</span>
+            )}
+          </div>
+        )}
 
         {/* Cuisine type tags */}
         {r.types.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-1">
+          <div className="mb-4 flex flex-wrap gap-1.5">
             {r.types.map((t) => (
               <span
                 key={t}
-                className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs text-green-700"
+                className="rounded-full bg-white/5 px-2.5 py-1 text-xs font-medium text-slate-300 ring-1 ring-white/10"
               >
                 {TYPE_LABELS[t] || t.replace(/_/g, ' ')}
               </span>
@@ -142,9 +128,10 @@ export default function RestaurantCard({ restaurant: r, rank }) {
         )}
 
         {/* Address */}
-        <p className="mb-3 line-clamp-2 flex-1 text-sm leading-relaxed text-gray-500">
-          📌 {r.address}
-        </p>
+        <div className="mb-5 flex flex-1 items-start gap-2 text-sm text-slate-400">
+          <span className="mt-0.5 opacity-60">📍</span>
+          <p className="leading-relaxed">{r.address}</p>
+        </div>
 
         {/* Reviews toggle */}
         {r.reviews.length > 0 && (
@@ -176,20 +163,20 @@ export default function RestaurantCard({ restaurant: r, rank }) {
         )}
 
         {/* Action buttons */}
-        <div className="mt-auto flex gap-2 pt-2">
+        <div className="mt-auto flex w-full gap-2 pt-2 border-t border-white/5">
           <a
             href={r.mapsUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-center text-sm font-semibold text-white transition hover:bg-emerald-700"
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-white/5 py-3 text-sm font-medium text-white ring-1 ring-white/10 transition-all hover:bg-white/10 hover:ring-white/20"
           >
-            🗺️ Get Directions
+            <span>Directions</span> ↗
           </a>
           {r.phone && (
             <a
               href={`tel:${r.phone}`}
               title={r.phone}
-              className="rounded-xl border border-gray-200 px-3 py-2.5 text-gray-600 transition hover:bg-gray-50"
+              className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/5 text-lg ring-1 ring-white/10 transition-all hover:bg-white/10 hover:ring-white/20"
             >
               📞
             </a>
@@ -200,7 +187,7 @@ export default function RestaurantCard({ restaurant: r, rank }) {
               target="_blank"
               rel="noopener noreferrer"
               title="Website"
-              className="rounded-xl border border-gray-200 px-3 py-2.5 text-gray-600 transition hover:bg-gray-50"
+              className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/5 text-lg ring-1 ring-white/10 transition-all hover:bg-white/10 hover:ring-white/20"
             >
               🌐
             </a>

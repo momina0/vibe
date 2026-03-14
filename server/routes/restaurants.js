@@ -22,39 +22,8 @@ function sanitize(str) {
   return str.replace(/[<>"'`]/g, '').substring(0, 500).trim();
 }
 
-// ── Foursquare category IDs for common Pakistani vibes ──────────────────────
-// See: https://location.foursquare.com/developer/reference/categories
-const VIBE_CATEGORY_MAP = {
-  cafe:       '13032', // Café
-  coffee:     '13032',
-  chai:       '13032',
-  rooftop:    '13065', // Restaurant (generic, filtered by query)
-  fine:       '13064', // Fine Dining
-  'fine dining': '13064',
-  romantic:   '13064',
-  fast:       '13145', // Fast Food
-  burger:     '13145',
-  pizza:      '13145',
-  street:     '13306', // Street Food
-  karahi:     '13065',
-  bbq:        '13049', // BBQ
-  grill:      '13049',
-  bar:        '13003', // Bar (for mocktail/shisha spots etc.)
-  shisha:     '13003',
-  bakery:     '13002', // Bakery
-  dessert:    '13040', // Dessert Shop
-  ice:        '13040',
-  biryani:    '13065',
-  desi:       '13065',
-};
-
-function pickCategory(keywords = []) {
-  const lower = keywords.map((k) => k.toLowerCase());
-  for (const [key, cat] of Object.entries(VIBE_CATEGORY_MAP)) {
-    if (lower.some((k) => k.includes(key))) return cat;
-  }
-  return '13065'; // default: Restaurant
-}
+// ── Delay helper to prevent Overpass API rate limits ─────────────────────────
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ── POST /api/restaurants/search ─────────────────────────────────────────────
 router.post('/search', async (req, res) => {
@@ -70,15 +39,12 @@ router.post('/search', async (req, res) => {
   const userLng = lng && !isNaN(parseFloat(lng)) ? parseFloat(lng) : null;
 
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  const FSQ_KEY = process.env.FOURSQUARE_API_KEY;
-  const fsqHeaders = { Authorization: FSQ_KEY };
 
-  // ── Step 1: Groq interprets the vibe with structured reasoning ───────────
+  // ── Step 1: Groq interprets the vibe into OpenStreetMap tags ────────────
   let interpretation = {
-    searchQuery: `restaurant ${cleanVibe} ${cleanCity}`,
-    searchQuery2: `${cleanCity} restaurant`,
     vibeDescription: cleanVibe,
-    keywords: ['restaurant', cleanCity, 'Pakistan'],
+    osmTags: { amenity: 'restaurant' },
+    fallbackTags: { amenity: 'cafe' },
     mustHave: [],
     avoid: [],
   };
@@ -89,20 +55,20 @@ router.post('/search', async (req, res) => {
       messages: [
         {
           role: 'system',
-          content: `You are a food expert specializing in Pakistani restaurant culture (Karachi, Lahore, Islamabad, Peshawar, Quetta, etc.).
+          content: `You are a food expert specializing in Pakistani restaurant culture (Karachi, Lahore, Islamabad, Faisalabad, etc.).
+We are using OpenStreetMap (Overpass API) to find restaurants.
 
 Think step by step before answering:
-1. What TYPE of place does this vibe call for? (e.g. rooftop cafe, desi dhaba, fine dining, fast food, street food)
-2. What specific FOOD or CUISINE fits? (e.g. karahi, biryani, burgers, chai, continental)
-3. What ATMOSPHERE matters? (e.g. quiet, lively, outdoor, family-friendly, romantic)
+1. What TYPE of place does this vibe call for?
+   - OpenStreetMap tags examples: {"amenity": "cafe"}, {"amenity": "restaurant", "cuisine": "pakistani"}, {"amenity": "restaurant", "cuisine": "burger"}, {"amenity": "fast_food"}, {"amenity": "ice_cream"}.
+2. What is a broader fallback tag if the first one yields no results? (e.g. just {"amenity": "restaurant"})
 
 Return ONLY a valid JSON object with:
-- searchQuery: string — primary search phrase for Foursquare (e.g. "rooftop cafe islamabad" or "desi karahi lahore")
-- searchQuery2: string — an ALTERNATIVE, slightly different search phrase to catch more results (e.g. "karahi restaurant outdoor" or "coffee lounge islamabad")
-- vibeDescription: string — friendly one-liner of what you understood, max 12 words
-- keywords: string[] — 3-5 food/atmosphere keywords (lowercase)
-- mustHave: string[] — 2-3 features this place MUST have to match the vibe (e.g. ["outdoor seating", "late night"])
-- avoid: string[] — 1-2 things that would be a bad match (e.g. ["fast food", "noisy"])`,
+- vibeDescription: string — friendly one-liner of what you understood (max 12 words)
+- osmTags: object — exact OpenStreetMap tags to search for (e.g. {"amenity": "cafe"})
+- fallbackTags: object — broader OpenStreetMap tags if the first fails (e.g. {"amenity": "restaurant"})
+- mustHave: string[] — 2-3 features this place MUST have to match the vibe
+- avoid: string[] — 1-2 things that would be a bad match`,
         },
         {
           role: 'user',
@@ -118,215 +84,195 @@ Return ONLY a valid JSON object with:
     console.warn('Groq Step 1 failed, using fallback:', aiErr.message);
   }
 
-  // ── Step 2: Dual Foursquare queries for broader coverage ─────────────────
-  const categoryId = pickCategory(interpretation.keywords || []);
-
-  const baseParams = {
-    categories: categoryId,
-    limit: 10,
-    fields: 'fsq_id,name,geocodes,location,categories,distance,rating,stats,price,photos,hours,description',
+  // Helper to build Overpass API query
+  const buildOverpassQuery = (tags, areaName, lat, lng, radius = 5000) => {
+    const tagFilters = Object.entries(tags).map(([k, v]) => `["${k}"="${v}"]`).join('');
+    
+    if (lat !== null && lng !== null) {
+      // Search around GPS coordinates
+      return `
+        [out:json][timeout:25];
+        nwr${tagFilters}(around:${radius},${lat},${lng});
+        out center;
+      `;
+    } else {
+      // Search by city name
+      return `
+        [out:json][timeout:25];
+        area["name:en"="${areaName}"]->.searchArea;
+        (
+          area["name"="${areaName}"]->.searchArea;
+        );
+        nwr${tagFilters}(area.searchArea);
+        out center;
+      `;
+    }
   };
 
-  if (userLat !== null && userLng !== null) {
-    baseParams.ll = `${userLat},${userLng}`;
-    baseParams.radius = 8000;
-  } else {
-    baseParams.near = `${cleanCity}, Pakistan`;
-  }
-
-  let places = [];
+  // ── Step 2: Query OpenStreetMap via Overpass API ─────────────────────────
+  let overpassElements = [];
+  
   try {
-    // Run both queries in parallel
-    const [res1, res2] = await Promise.allSettled([
-      axios.get('https://api.foursquare.com/v3/places/search', {
-        headers: fsqHeaders,
-        params: { ...baseParams, query: interpretation.searchQuery || `restaurant ${cleanCity}` },
-        timeout: 12000,
-      }),
-      axios.get('https://api.foursquare.com/v3/places/search', {
-        headers: fsqHeaders,
-        params: { ...baseParams, query: interpretation.searchQuery2 || `${cleanCity} restaurant`, categories: '13065' },
-        timeout: 12000,
-      }),
-    ]);
+    // Increase base radius to 15km to find better spots even if further away
+    const query1 = buildOverpassQuery(interpretation.osmTags || { amenity: 'restaurant' }, cleanCity, userLat, userLng, 15000);
+    
+    let response = await axios.post('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(query1)}`, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+    
+    overpassElements = response.data.elements || [];
 
-    const set1 = res1.status === 'fulfilled' ? (res1.value.data.results || []) : [];
-    const set2 = res2.status === 'fulfilled' ? (res2.value.data.results || []) : [];
-
-    // Merge and deduplicate by fsq_id
-    const seen = new Set();
-    for (const p of [...set1, ...set2]) {
-      if (!seen.has(p.fsq_id)) {
-        seen.add(p.fsq_id);
-        places.push(p);
-      }
+    // Fallback if no results
+    if (overpassElements.length === 0 && interpretation.fallbackTags) {
+      await delay(1000); // polite delay
+      const query2 = buildOverpassQuery(interpretation.fallbackTags, cleanCity, userLat, userLng, 20000);
+      response = await axios.post('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(query2)}`, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      });
+      overpassElements = response.data.elements || [];
     }
-  } catch (fsqErr) {
-    console.error('Foursquare search error:', fsqErr.response?.data || fsqErr.message);
-    return res
-      .status(500)
-      .json({ error: 'Could not fetch restaurants. Check your Foursquare API key.' });
+    
+    // Ultimate fallback: Just any restaurant/cafe
+    if (overpassElements.length === 0) {
+      await delay(1000);
+      const query3 = buildOverpassQuery({ amenity: 'restaurant' }, cleanCity, null, null); 
+      response = await axios.post('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(query3)}`, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      });
+      overpassElements = response.data.elements || [];
+    }
+
+  } catch (osmErr) {
+    console.error('Overpass API error:', osmErr.message);
+    return res.status(500).json({ error: 'Could not fetch restaurants from maps.' });
   }
 
-  // ── Step 3: Enrich top 10 with tips (visitor reviews) ───────────────────
-  const enriched = await Promise.allSettled(
-    places.slice(0, 10).map(async (place) => {
-      let tips = [];
-      try {
-        const tipsRes = await axios.get(
-          `https://api.foursquare.com/v3/places/${place.fsq_id}/tips`,
-          {
-            headers: fsqHeaders,
-            params: { limit: 3, fields: 'text,created_at,agree_count' },
-            timeout: 8000,
-          }
-        );
-        tips = tipsRes.data.results || [];
-      } catch {
-        // Tips are optional
-      }
+  // Filter out results without names and format them
+  let places = overpassElements
+    .filter(e => e.tags && e.tags.name)
+    .map(e => {
+       const placeLat = e.lat || e.center?.lat;
+       const placeLng = e.lon || e.center?.lon;
+       
+       let distanceKm = null;
+       if (userLat !== null && userLng !== null && placeLat && placeLng) {
+         distanceKm = getDistance(userLat, userLng, placeLat, placeLng).toFixed(1);
+       }
+       
+       const tags = e.tags;
+       const address = [tags['addr:street'], tags['addr:city'] || cleanCity, 'Pakistan']
+         .filter(Boolean).join(', ');
 
-      const geo = place.geocodes?.main;
-      const placeLat = geo?.latitude ?? null;
-      const placeLng = geo?.longitude ?? null;
+       const types = [tags.amenity, tags.cuisine].filter(Boolean);
 
-      let distanceKm = null;
-      if (place.distance != null) {
-        distanceKm = (place.distance / 1000).toFixed(1);
-      } else if (userLat !== null && userLng !== null && placeLat && placeLng) {
-        distanceKm = getDistance(userLat, userLng, placeLat, placeLng).toFixed(1);
-      }
+       return {
+         id: e.id.toString(),
+         name: tags.name,
+         rating: null, // OSM doesn't have ratings natively
+         totalRatings: 0,
+         address,
+         lat: placeLat,
+         lng: placeLng,
+         distance: distanceKm,
+         reviews: [], // No visitor reviews in OSM
+         photoUrl: null, // Hard to get reliably from OSM
+         isOpen: tags.opening_hours ? true : null, // Simplification
+         priceLevel: null,
+         phone: tags.phone || tags['contact:phone'] || null,
+         website: tags.website || tags['contact:website'] || null,
+         types,
+         mapsUrl: `https://www.google.com/maps/search/?api=1&query=${placeLat},${placeLng}`,
+         vibeScore: null,
+         vibeReason: null,
+       };
+    });
 
-      const photo = place.photos?.[0];
-      const photoUrl = photo ? `${photo.prefix}800x600${photo.suffix}` : null;
+  // Unique by name and distance logic
+  const uniquePlaces = [];
+  const seenNames = new Set();
+  for (const p of places) {
+    if (!seenNames.has(p.name.toLowerCase())) {
+      seenNames.add(p.name.toLowerCase());
+      uniquePlaces.push(p);
+    }
+  }
 
-      const rawRating = place.rating ?? null;
-      const rating = rawRating !== null ? parseFloat((rawRating / 2).toFixed(1)) : null;
+  // Pre-sort by distance to feed the closest ones to Groq initially, but we allow 25 now
+  uniquePlaces.sort((a, b) => {
+    if (a.distance !== null && b.distance !== null) return parseFloat(a.distance) - parseFloat(b.distance);
+    return 0;
+  });
 
-      const loc = place.location || {};
-      const address = [loc.address, loc.locality || loc.city, loc.country]
-        .filter(Boolean)
-        .join(', ') || `${cleanCity}, Pakistan`;
+  // Take top 25 so AI has more to choose from
+  let restaurants = uniquePlaces.slice(0, 25);
 
-      const types = (place.categories || []).map((c) => c.name).slice(0, 3);
-      const tipTexts = tips.map((t) => (t.text || '').substring(0, 150)).join(' | ');
-
-      return {
-        id: place.fsq_id,
-        name: place.name,
-        rating,
-        totalRatings: place.stats?.total_ratings ?? 0,
-        address,
-        lat: placeLat,
-        lng: placeLng,
-        distance: distanceKm,
-        reviews: tips.map((t) => ({
-          author: 'Visitor',
-          rating: null,
-          text: (t.text || '').substring(0, 200),
-          time: t.created_at
-            ? new Date(t.created_at * 1000).toLocaleDateString('en-PK', {
-                month: 'short',
-                year: 'numeric',
-              })
-            : '',
-        })),
-        photoUrl,
-        isOpen: place.hours?.open_now ?? null,
-        priceLevel: place.price ?? null,
-        types,
-        tipTexts, // used internally for AI scoring
-        mapsUrl: `https://www.google.com/maps/search/${encodeURIComponent(
-          place.name + ' ' + cleanCity + ' Pakistan'
-        )}`,
-        // AI score fields — filled in Step 4
-        vibeScore: null,
-        vibeReason: null,
-      };
-    })
-  );
-
-  let restaurants = enriched
-    .filter((r) => r.status === 'fulfilled' && r.value !== null)
-    .map((r) => r.value);
-
-  // ── Step 4: Groq AI re-ranks restaurants by vibe match ──────────────────
-  // The AI reads each restaurant's name, type, and real visitor tips, then
-  // scores how well it matches the original vibe — this is the key accuracy fix.
+  // ── Step 3: Groq AI re-ranks restaurants by vibe match ──────────────────
   try {
     const candidateList = restaurants.map((r, i) => ({
       index: i,
       name: r.name,
       types: r.types.join(', '),
-      rating: r.rating,
-      isOpen: r.isOpen,
-      priceLevel: r.priceLevel,
-      visitorTips: r.tipTexts || 'No tips available',
+      distance: r.distance + ' km',
+      description: r.description
     }));
 
-    const rankCompletion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        {
-          role: 'system',
-          content: `You are a Pakistani food expert who judges how well restaurants match a customer's specific vibe/mood.
-
-For each restaurant in the list, give:
-- vibeScore: integer 1-10 (10 = perfect match, 1 = terrible match)
-- vibeReason: string — one punchy sentence (max 12 words) explaining WHY it matches or doesn't
-
-Be honest and critical. A "romantic" vibe should score fast food chains very low.
-A "late night karahi" vibe should score upscale continental restaurants low.
-
-Return ONLY a valid JSON object: { "scores": [ { "index": 0, "vibeScore": 8, "vibeReason": "..." }, ... ] }`,
-        },
-        {
-          role: 'user',
-          content: `User vibe: "${cleanVibe}"
+    if (candidateList.length > 0) {
+      const rankCompletion = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a Pakistani food expert who judges how well restaurants match a customer's specific vibe/mood.
+  
+  For each restaurant in the list, give:
+  - vibeScore: integer 1-10 (10 = perfect match, 1 = terrible match)
+  - vibeReason: string — one punchy sentence (max 12 words) explaining WHY it matches or doesn't
+  
+  Return ONLY a valid JSON object: { "scores": [ { "index": 0, "vibeScore": 8, "vibeReason": "..." }, ... ] }`
+          },
+          {
+            role: 'user',
+            content: `User vibe: "${cleanVibe}"
 What they want: ${interpretation.vibeDescription}
-Must-have features: ${(interpretation.mustHave || []).join(', ') || 'none specified'}
-Avoid: ${(interpretation.avoid || []).join(', ') || 'none specified'}
+Must-haves: ${(interpretation.mustHave || []).join(', ') || 'none specified'}
 
-Restaurants to score:
-${JSON.stringify(candidateList, null, 2)}`,
-        },
-      ],
-      response_format: { type: 'json_object' },
-      max_tokens: 600,
-      temperature: 0.3,
-    });
+Restaurants:
+${JSON.stringify(candidateList, null, 2)}`
+          },
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: 600,
+        temperature: 0.3,
+      });
 
-    const scoreData = JSON.parse(rankCompletion.choices[0].message.content);
-    const scores = scoreData.scores || [];
+      const scoreData = JSON.parse(rankCompletion.choices[0].message.content);
+      const scores = scoreData.scores || [];
 
-    // Apply scores back to restaurants
-    for (const s of scores) {
-      if (restaurants[s.index]) {
-        restaurants[s.index].vibeScore = s.vibeScore ?? null;
-        restaurants[s.index].vibeReason = s.vibeReason ?? null;
+      for (const s of scores) {
+        if (restaurants[s.index]) {
+          restaurants[s.index].vibeScore = s.vibeScore ?? null;
+          restaurants[s.index].vibeReason = s.vibeReason ?? null;
+        }
       }
+
+      // Sort by vibeScore desc entirely! Distance is only a tie-breaker.
+      restaurants.sort((a, b) => {
+        const scoreDiff = (b.vibeScore || 0) - (a.vibeScore || 0);
+        if (scoreDiff !== 0) return scoreDiff; // STRICT priority to AI Vibe Score
+        
+        // Tie-breaker: closest first
+        if (a.distance !== null && b.distance !== null) return parseFloat(a.distance) - parseFloat(b.distance);
+        return 0;
+      });
+      
+      // Cut back down to top 15 after AI has ranked them all
+      restaurants = restaurants.slice(0, 15);
     }
-
-    // Sort by vibeScore desc, fall back to rating
-    restaurants.sort((a, b) => {
-      const scoreDiff = (b.vibeScore || 0) - (a.vibeScore || 0);
-      if (scoreDiff !== 0) return scoreDiff;
-      return (b.rating || 0) - (a.rating || 0);
-    });
   } catch (rankErr) {
-    console.warn('Groq Step 4 re-ranking failed, falling back to distance/rating sort:', rankErr.message);
-    restaurants.sort((a, b) => {
-      if (a.distance !== null && b.distance !== null)
-        return parseFloat(a.distance) - parseFloat(b.distance);
-      return (b.rating || 0) - (a.rating || 0);
-    });
+    console.warn('Groq Step 3 re-ranking failed:', rankErr.message);
   }
-
-  // Strip internal-only tipTexts field before sending to client
-  restaurants = restaurants.map(({ tipTexts, ...r }) => r);
 
   res.json({ restaurants, interpretation });
 });
 
 export default router;
-
