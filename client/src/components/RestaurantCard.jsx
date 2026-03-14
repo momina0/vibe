@@ -43,8 +43,13 @@ export default function RestaurantCard({ restaurant: r, rank }) {
   const [showReviews, setShowReviews] = useState(false);
   const [imgError, setImgError] = useState(false);
 
-  const photoSrc = r.photoRef && !imgError
-    ? `/api/restaurants/photo?ref=${encodeURIComponent(r.photoRef)}`
+  const photoSrc = r.photoUrl && !imgError ? r.photoUrl : null;
+
+  // Determine score color
+  const scoreColor =
+    r.vibeScore >= 8 ? 'bg-emerald-500'
+    : r.vibeScore >= 5 ? 'bg-amber-400'
+    : r.vibeScore != null ? 'bg-red-400'
     : null;
 
   return (
@@ -68,6 +73,13 @@ export default function RestaurantCard({ restaurant: r, rank }) {
         <div className="absolute left-3 top-3 rounded-full bg-emerald-600 px-2.5 py-0.5 text-xs font-bold text-white shadow">
           #{rank}
         </div>
+
+        {/* AI Vibe Score badge */}
+        {r.vibeScore != null && (
+          <div className={`absolute left-3 bottom-3 rounded-full px-2.5 py-1 text-xs font-bold text-white shadow ${scoreColor}`}>
+            ✦ {r.vibeScore}/10 vibe match
+          </div>
+        )}
 
         {/* Open/Closed */}
         {r.isOpen !== null && (
@@ -99,6 +111,13 @@ export default function RestaurantCard({ restaurant: r, rank }) {
             </span>
           )}
         </div>
+
+        {/* AI Vibe Reason */}
+        {r.vibeReason && (
+          <p className="mb-2 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs italic text-emerald-700">
+            🤖 {r.vibeReason}
+          </p>
+        )}
 
         {/* Stars + review count */}
         <div className="mb-2 flex items-center gap-2">
